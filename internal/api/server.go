@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"os"
@@ -110,7 +111,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{
 		"running":  running,
 		"tun_name": tunName,
-		"uptime":   time.Since(s.startedAt).String(),
+		"uptime":   formatUptime(time.Since(s.startedAt)),
 		"pid":      os.Getpid(),
 		"uid":      os.Getuid(),
 		"listen":   listen,
@@ -147,6 +148,26 @@ func (s *Server) handleTUNStop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"ok": true, "running": false})
+}
+
+// formatUptime 把时长转成「1 天 2 小时」「3 分 5 秒」这类可读文本
+func formatUptime(d time.Duration) string {
+	d = d.Round(time.Second)
+	days := int(d.Hours()) / 24
+	hours := int(d.Hours()) % 24
+	mins := int(d.Minutes()) % 60
+	secs := int(d.Seconds()) % 60
+
+	switch {
+	case days > 0:
+		return fmt.Sprintf("%d 天 %d 小时", days, hours)
+	case hours > 0:
+		return fmt.Sprintf("%d 小时 %d 分", hours, mins)
+	case mins > 0:
+		return fmt.Sprintf("%d 分 %d 秒", mins, secs)
+	default:
+		return fmt.Sprintf("%d 秒", secs)
+	}
 }
 
 func (s *Server) handleConnections(w http.ResponseWriter, r *http.Request) {

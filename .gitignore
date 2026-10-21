@@ -20,3 +20,12 @@ REA_EVIDENCE_REPORT.md
 # 本机运行时残留
 *.pid
 *.log
+
+# 发布包
+dist/
+
+# 浏览器自动化临时目录
+.playwright-cli/
+
+# 编辑器/工具临时文件
+XX*
