@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TunnelPilot 控制台</title>
+<style>
+:root{
+  --bg:#14151a; --panel:#1c1e26; --panel2:#232630; --border:#2e3140;
+  --text:#e6e8ee; --muted:#98a0b3; --accent:#5b8cff; --green:#3fb950;
+  --red:#f0555f; --amber:#d9a13b;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);
+  font:14px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif}
+header{display:flex;align-items:center;gap:16px;padding:14px 22px;
+  background:var(--panel);border-bottom:1px solid var(--border)}
+header h1{font-size:16px;margin:0;font-weight:600}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--muted)}
+.dot.on{background:var(--green)}
+.dot.off{background:var(--red)}
+.status{color:var(--muted);font-size:13px}
+nav{display:flex;gap:4px;margin-left:auto}
+nav button{background:transparent;border:1px solid var(--border);color:var(--muted);
+  padding:6px 14px;border-radius:7px;cursor:pointer;font-size:13px}
+nav button.active{background:var(--accent);border-color:var(--accent);color:#fff}
+main{padding:20px 22px;max-width:1400px;margin:0 auto}
+.panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;
+  padding:16px 18px;margin-bottom:18px}
+.panel h2{font-size:14px;margin:0 0 12px;font-weight:600;color:var(--text)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;padding:8px 10px;color:var(--muted);font-weight:500;
+  border-bottom:1px solid var(--border);white-space:nowrap}
+td{padding:8px 10px;border-bottom:1px solid #23262f;white-space:nowrap}
+tr:hover td{background:#1f222b}
+.tag{display:inline-block;padding:2px 8px;border-radius:5px;font-size:12px}
+.tag.direct{background:#1f3a2a;color:#6ddb8f}
+.tag.proxy{background:#1e2e4a;color:#7fb0ff}
+.tag.block{background:#3d2026;color:#ff8b93}
+.tag.chain{background:#33294a;color:#b79bff}
+.st{font-size:12px;color:var(--muted)}
+.st.active{color:var(--green)}
+.st.failed,.st.blocked{color:var(--red)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px}
+.field{margin-bottom:10px}
+label{display:block;font-size:12px;color:var(--muted);margin-bottom:4px}
+input,select,textarea{width:100%;background:var(--panel2);border:1px solid var(--border);
+  color:var(--text);padding:7px 9px;border-radius:6px;font-size:13px;font-family:inherit}
+textarea{min-height:70px;resize:vertical}
+button.act{background:var(--accent);border:none;color:#fff;padding:7px 16px;
+  border-radius:6px;cursor:pointer;font-size:13px}
+button.ghost{background:transparent;border:1px solid var(--border);color:var(--muted)}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.card{background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:12px}
+.card .t{font-size:12px;color:var(--muted)}
+.card .v{font-size:19px;margin-top:3px}
+.hide{display:none}
+.logs{background:#0e1015;border:1px solid var(--border);border-radius:8px;padding:12px;
+  font-family:ui-monospace,Menlo,monospace;font-size:12px;color:#a9b2c6;
+  max-height:280px;overflow:auto;white-space:pre-wrap}
+.empty{color:var(--muted);padding:22px;text-align:center;font-size:13px}
+</style>
+</head>
+<body>
+<header>
+  <span class="dot" id="dot"></span>
+  <h1>TunnelPilot</h1>
+  <span class="status" id="statusText">加载中…</span>
+  <nav>
+    <button class="active" data-tab="conn">实时连接</button>
+    <button data-tab="rules">分流规则</button>
+    <button data-tab="proxy">代理服务器</button>
+    <button data-tab="dns">DNS 映射</button>
+    <button data-tab="log">运行日志</button>
+  </nav>
+</header>
+
+<main>
+  <section id="tab-conn">
+    <div class="grid" style="margin-bottom:18px">
+      <div class="card"><div class="t">运行状态</div><div class="v" id="statRun">—</div></div>
+      <div class="card"><div class="t">虚拟网卡</div><div class="v" id="statTun">—</div></div>
+      <div class="card"><div class="t">活跃连接</div><div class="v" id="statConn">0</div></div>
+      <div class="card"><div class="t">运行时长</div><div class="v" id="statUp">—</div></div>
+    </div>
+    <div class="panel">
+      <h2>连接列表</h2>
+      <div class="row" style="margin-bottom:12px">
+        <input id="fSearch" placeholder="搜索进程 / 域名 / IP / 规则…"
+               style="max-width:280px" oninput="filters.q=this.value;renderConns()">
+        <select id="fProto" style="max-width:110px" onchange="filters.proto=this.value;renderConns()">
+          <option value="">全部协议</option><option value="tcp">TCP</option><option value="udp">UDP</option>
+        </select>
+        <select id="fAction" style="max-width:130px" onchange="filters.action=this.value;renderConns()">
+          <option value="">全部动作</option><option value="direct">直连</option>
+          <option value="proxy">代理</option><option value="chain">代理链</option><option value="block">阻断</option>
+        </select>
+        <select id="fStatus" style="max-width:130px" onchange="filters.status=this.value;renderConns()">
+          <option value="">全部状态</option><option value="active">进行中</option>
+          <option value="connecting">连接中</option><option value="closed">已关闭</option>
+          <option value="failed">失败</option><option value="blocked">已阻断</option>
+        </select>
+        <label style="display:flex;align-items:center;gap:5px;margin:0;color:var(--text);font-size:13px">
+          <input type="checkbox" id="fActive" style="width:auto" onchange="filters.onlyActive=this.checked;renderConns()"> 仅进行中
+        </label>
+        <button class="act ghost" onclick="resetFilters()">重置</button>
+        <span class="status" id="filterCount"></span>
+      </div>
+      <div style="overflow-x:auto">
+        <table id="connTable">
+          <thead><tr>
+            <th>时间</th><th>协议</th><th>进程</th><th>PID</th><th>目标</th>
+            <th>端口</th><th>命中规则</th><th>动作</th><th>状态</th><th>延迟</th>
+            <th>上行</th><th>下行</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="empty" id="connEmpty">暂无连接</div>
+    </div>
+  </section>
+
+  <section id="tab-rules" class="hide">
+    <div class="panel">
+      <h2>分流规则（自上而下，首个命中生效）</h2>
+      <div style="overflow-x:auto">
+        <table id="ruleTable">
+          <thead><tr>
+            <th>启用</th><th>名称</th><th>应用程序</th><th>目标主机</th>
+            <th>端口</th><th>动作</th><th></th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button class="act" onclick="addRule()">+ 新增规则</button>
+        <button class="act ghost" onclick="saveProfile()">保存配置</button>
+        <button class="act ghost" onclick="document.getElementById('ppxFile').click()">导入 .ppx</button>
+        <a href="/api/ppx/export"><button class="act ghost">导出 .ppx</button></a>
+        <input type="file" id="ppxFile" accept=".ppx" style="display:none" onchange="importPPX(this)">
+      </div>
+      <p style="color:var(--muted);font-size:12px;margin-bottom:0">
+        应用程序填进程名或 Bundle ID；目标主机支持通配符 <code>*.openai.com</code>、
+        IP 与 CIDR；多个值用分号分隔。留空表示匹配全部。
+      </p>
+    </div>
+  </section>
+
+  <section id="tab-proxy" class="hide">
+    <div class="panel">
+      <h2>代理服务器</h2>
+      <div style="overflow-x:auto">
+        <table id="proxyTable">
+          <thead><tr>
+            <th>ID</th><th>名称</th><th>协议</th><th>地址</th><th>端口</th>
+            <th>用户名</th><th>密码</th><th></th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button class="act" onclick="addProxy()">+ 新增服务器</button>
+        <button class="act ghost" onclick="saveProfile()">保存配置</button>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>运行参数</h2>
+      <div class="grid">
+        <div class="field"><label>虚拟网卡名称</label><input id="cfgTun" placeholder="utun10"></div>
+        <div class="field"><label>Fake-IP 网段</label><input id="cfgFake" placeholder="198.18.0.0/15"></div>
+        <div class="field"><label>管理端口</label><input id="cfgPort" type="number" placeholder="9090"></div>
+      </div>
+      <button class="act" onclick="saveProfile()">保存配置</button>
+    </div>
+  </section>
+
+  <section id="tab-dns" class="hide">
+    <div class="panel">
+      <h2>Fake-IP 域名映射</h2>
+      <div style="overflow-x:auto">
+        <table id="dnsTable">
+          <thead><tr><th>域名</th><th>Fake-IP</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="empty" id="dnsEmpty">暂无映射（需先有流量经由代理规则触发 DNS 解析）</div>
+    </div>
+  </section>
+
+  <section id="tab-log" class="hide">
+    <div class="panel">
+      <h2>运行日志</h2>
+      <div class="logs" id="logBox">加载中…</div>
+    </div>
+  </section>
+</main>
+
+<script>
+let profile = null;
+
+function fmtBytes(n){
+  if(!n) return '0';
+  const u=['B','KB','MB','GB'];
+  let i=0; while(n>=1024&&i<u.length-1){n/=1024;i++;}
+  return n.toFixed(n<10&&i>0?1:0)+u[i];
+}
+function esc(s){return (s==null?'':String(s)).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+
+async function loadStatus(){
+  const r = await fetch('/api/status').then(x=>x.json());
+  document.getElementById('dot').className = 'dot '+(r.running?'on':'off');
+  document.getElementById('statusText').textContent =
+    (r.running?'运行中':'已停止') + ' · PID ' + r.pid + ' · UID ' + r.uid;
+  document.getElementById('statRun').textContent = r.running?'已接管':'未启动';
+  document.getElementById('statTun').textContent = r.tun_name||'—';
+  document.getElementById('statUp').textContent = r.uptime||'—';
+}
+
+let allConns = [];
+let filters = {q:'', proto:'', action:'', status:'', onlyActive:false};
+
+function actionKind(a){
+  a = a||'';
+  if(a==='直连') return 'direct';
+  if(a==='阻断') return 'block';
+  if(a.indexOf('链')>=0) return 'chain';
+  return 'proxy';
+}
+const statusText = {active:'进行中',connecting:'连接中',closed:'已关闭',failed:'失败',blocked:'已阻断'};
+
+function resetFilters(){
+  filters={q:'',proto:'',action:'',status:'',onlyActive:false};
+  document.getElementById('fSearch').value='';
+  document.getElementById('fProto').value='';
+  document.getElementById('fAction').value='';
+  document.getElementById('fStatus').value='';
+  document.getElementById('fActive').checked=false;
+  renderConns();
+}
+
+function renderConns(){
+  const list = allConns.filter(c=>{
+    if(filters.proto && c.network!==filters.proto) return false;
+    if(filters.status && c.status!==filters.status) return false;
+    if(filters.action && actionKind(c.action)!==filters.action) return false;
+    if(filters.onlyActive && c.status!=='active') return false;
+    if(filters.q){
+      const q=filters.q.toLowerCase();
+      const hay=[c.process,c.target,c.real_domain,c.rule,c.action,c.pid].join(' ').toLowerCase();
+      if(hay.indexOf(q)<0) return false;
+    }
+    return true;
+  });
+  const tb = document.querySelector('#connTable tbody');
+  document.getElementById('connEmpty').style.display = list.length?'none':'block';
+  document.getElementById('connEmpty').textContent =
+    allConns.length?'当前筛选条件下无匹配连接':'暂无连接';
+  document.getElementById('filterCount').textContent =
+    (list.length===allConns.length)?`共 ${allConns.length} 条`:`${list.length} / ${allConns.length} 条`;
+  tb.innerHTML = list.map(c=>`<tr>
+    <td>${new Date(c.started_at).toLocaleTimeString('zh-CN')}</td>
+    <td>${esc(c.network)}</td>
+    <td>${esc(c.process||'?')}</td>
+    <td>${c.pid||''}</td>
+    <td>${esc(c.real_domain||c.target)}</td>
+    <td>${c.port||''}</td>
+    <td>${esc(c.rule||'')}</td>
+    <td><span class="tag ${actionKind(c.action)}">${esc(c.action||'')}</span></td>
+    <td class="st ${esc(c.status)}">${esc(statusText[c.status]||c.status)}</td>
+    <td>${c.latency_ms?c.latency_ms+'ms':'—'}</td>
+    <td>${fmtBytes(c.bytes_sent)}</td>
+    <td>${fmtBytes(c.bytes_recv)}</td>
+  </tr>`).join('');
+}
+
+async function loadConnections(){
+  allConns = await fetch('/api/connections').then(x=>x.json());
+  const active = allConns.filter(c=>c.status==='active').length;
+  document.getElementById('statConn').textContent = active?`${active} 活跃 / ${allConns.length}`:String(allConns.length);
+  renderConns();
+}
+
+function actionCell(a){
+  const types=[['Direct','直连'],['Proxy','代理'],['Block','阻断'],['Chain','代理链']];
+  let s1=`<select class="actType">${types.map(([v,l])=>
+    `<option value="${v}" ${a.type===v?'selected':''}>${l}</option>`).join('')}</select>`;
+  let s2=`<select class="actTarget"><option value="0">—</option>`;
+  (profile.proxy_servers||[]).forEach(p=>{
+    const sel=(a.type==='Proxy'&&a.proxy_id===p.id)?'selected':'';
+    s2+=`<option value="${p.id}" ${sel}>${esc(p.name||p.address+':'+p.port)}</option>`;
+  });
+  (profile.proxy_chains||[]).forEach(c=>{
+    const sel=(a.type==='Chain'&&a.chain_id===c.id)?'selected':'';
+    s2+=`<option value="${c.id}" ${sel}>链: ${esc(c.name)}</option>`;
+  });
+  s2+=`</select>`;
+  return s1+' '+s2;
+}
+
+function renderRules(){
+  const tb = document.querySelector('#ruleTable tbody');
+  tb.innerHTML = profile.rules.map((r,i)=>`<tr data-i="${i}">
+    <td><input type="checkbox" ${r.enabled?'checked':''} onchange="profile.rules[${i}].enabled=this.checked"></td>
+    <td><input value="${esc(r.name)}" oninput="profile.rules[${i}].name=this.value"></td>
+    <td><input value="${esc((r.applications||[]).join('; '))}" oninput="profile.rules[${i}].applications=this.value.split(/[;,]/).map(s=>s.trim()).filter(Boolean)"></td>
+    <td><input value="${esc((r.targets||[]).join('; '))}" oninput="profile.rules[${i}].targets=this.value.split(/[;,]/).map(s=>s.trim()).filter(Boolean)"></td>
+    <td><input style="width:110px" value="${esc((r.ports||[]).join(', '))}" oninput="profile.rules[${i}].ports=this.value.split(/[;,]/).map(s=>s.trim()).filter(Boolean)"></td>
+    <td>${actionCell(r.action)}</td>
+    <td><button class="act ghost" onclick="delRule(${i})">删除</button></td>
+  </tr>`).join('');
+}
+
+function renderProxies(){
+  const tb = document.querySelector('#proxyTable tbody');
+  tb.innerHTML = profile.proxy_servers.map((p,i)=>`<tr>
+    <td><input style="width:64px" type="number" value="${p.id}" oninput="profile.proxy_servers[${i}].id=+this.value"></td>
+    <td><input value="${esc(p.name)}" oninput="profile.proxy_servers[${i}].name=this.value"></td>
+    <td><select onchange="profile.proxy_servers[${i}].protocol=this.value">
+      ${['SOCKS5','SOCKS4','HTTPS'].map(t=>`<option ${p.protocol===t?'selected':''}>${t}</option>`).join('')}
+    </select></td>
+    <td><input value="${esc(p.address)}" oninput="profile.proxy_servers[${i}].address=this.value"></td>
+    <td><input style="width:80px" type="number" value="${p.port}" oninput="profile.proxy_servers[${i}].port=+this.value"></td>
+    <td><input value="${esc(p.username||'')}" oninput="profile.proxy_servers[${i}].username=this.value"></td>
+    <td><input type="password" value="${esc(p.password||'')}" oninput="profile.proxy_servers[${i}].password=this.value"></td>
+    <td><button class="act ghost" onclick="delProxy(${i})">删除</button></td>
+  </tr>`).join('');
+}
+
+function collectRules(){
+  document.querySelectorAll('#ruleTable tbody tr').forEach(tr=>{
+    const i=+tr.dataset.i;
+    const t=tr.querySelector('.actType'); const v=tr.querySelector('.actTarget');
+    if(!t||!v) return;
+    const type=t.value, id=+v.value||0;
+    profile.rules[i].action={
+      type,
+      proxy_id: type==='Proxy'?id:0,
+      chain_id: type==='Chain'?id:0
+    };
+  });
+}
+
+async function loadProfile(){
+  profile = await fetch('/api/profile').then(x=>x.json());
+  renderRules(); renderProxies();
+  document.getElementById('cfgTun').value = profile.tun_name||'';
+  document.getElementById('cfgFake').value = profile.fakeip_prefix||'';
+  document.getElementById('cfgPort').value = profile.listen_port||9090;
+}
+
+async function saveProfile(){
+  collectRules();
+  profile.tun_name = document.getElementById('cfgTun').value;
+  profile.fakeip_prefix = document.getElementById('cfgFake').value;
+  profile.listen_port = +document.getElementById('cfgPort').value;
+  const r = await fetch('/api/profile',{method:'PUT',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(profile)}).then(x=>x.json());
+  alert(r.error?'保存失败: '+r.error:'配置已保存');
+}
+
+function addRule(){
+  profile.rules.push({enabled:true,name:'新规则',applications:[],targets:[],ports:[],
+    action:{type:'Direct',proxy_id:0,chain_id:0}});
+  renderRules();
+}
+function delRule(i){ profile.rules.splice(i,1); renderRules(); }
+function addProxy(){
+  const id = Math.max(100,...profile.proxy_servers.map(p=>p.id))+1;
+  profile.proxy_servers.push({id,name:'新服务器',protocol:'SOCKS5',address:'127.0.0.1',port:7890});
+  renderProxies();
+}
+function delProxy(i){ profile.proxy_servers.splice(i,1); renderProxies(); }
+
+async function importPPX(input){
+  if(!input.files[0]) return;
+  const fd = new FormData(); fd.append('file', input.files[0]);
+  const r = await fetch('/api/ppx/import',{method:'POST',body:fd}).then(x=>x.json());
+  if(r.error){ alert('导入失败: '+r.error); }
+  else { alert(`导入成功：${r.rules} 条规则，${r.servers} 个代理服务器`); loadProfile(); }
+  input.value='';
+}
+
+async function loadDNS(){
+  const map = await fetch('/api/fakeip').then(x=>x.json());
+  const keys = Object.keys(map);
+  document.getElementById('dnsEmpty').style.display = keys.length?'none':'block';
+  document.querySelector('#dnsTable tbody').innerHTML =
+    keys.map(k=>`<tr><td>${esc(k)}</td><td>${esc(map[k])}</td></tr>`).join('');
+}
+
+async function loadLogs(){
+  const logs = await fetch('/api/logs').then(x=>x.json());
+  document.getElementById('logBox').textContent = logs.length?logs.join('\n'):'（暂无日志）';
+}
+
+document.querySelectorAll('nav button').forEach(b=>{
+  b.onclick = ()=>{
+    document.querySelectorAll('nav button').forEach(x=>x.classList.remove('active'));
+    b.classList.add('active');
+    ['conn','rules','proxy','dns','log'].forEach(t=>
+      document.getElementById('tab-'+t).classList.toggle('hide', t!==b.dataset.tab));
+  };
+});
+
+async function tick(){
+  try{
+    await loadStatus();
+    await loadConnections();
+    if(!document.getElementById('tab-dns').classList.contains('hide')) await loadDNS();
+    if(!document.getElementById('tab-log').classList.contains('hide')) await loadLogs();
+  }catch(e){}
+}
+loadProfile().then(tick);
+setInterval(tick, 2000);
+</script>
+</body>
+</html>

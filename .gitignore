@@ -1,0 +1,22 @@
+# 构建产物（前导斜杠限定根目录，避免误伤 cmd/tunnelpilot 等源码目录）
+/build/
+/tunnelpilot
+/tunnelpilot-tray
+*.test
+
+# 本地产物与缓存
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# 本地工作数据（不参与开源）
+.workbuddy/
+
+# 逆向分析样本，禁止入库
+Proxifier.app/
+REA_EVIDENCE_REPORT.md
+
+# 本机运行时残留
+*.pid
+*.log

@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<ProxifierProfile version="102" platform="MacOSX" product_id="2" product_minver="300">
+  <Options>
+    <Resolve>
+      <AutoModeDetection enabled="false" />
+      <ViaProxy enabled="true">
+        <TryLocalDnsFirst enabled="false" />
+      </ViaProxy>
+      <ExclusionList ExcludeSimpleHostnames="true">localhost; *.local; *.lan; 127.0.0.1</ExclusionList>
+    </Resolve>
+    <HandleDirectConnections enabled="true" />
+    <ConnectionLoopDetection enabled="true" resolve="true" />
+  </Options>
+  <ProxyList>
+    <Proxy id="100" type="SOCKS5">
+      <Address>127.0.0.1</Address>
+      <Port>7890</Port>
+      <Options>0</Options>
+    </Proxy>
+    <Proxy id="101" type="HTTPS">
+      <Address>127.0.0.1</Address>
+      <Port>7891</Port>
+      <Options>0</Options>
+    </Proxy>
+  </ProxyList>
+  <ChainList>
+    <Chain id="200" type="redundancy">
+      <Name>High-Availability Failover</Name>
+      <Proxy enabled="true">100</Proxy>
+      <Proxy enabled="true">101</Proxy>
+    </Chain>
+  </ChainList>
+  <RuleList>
+    <Rule enabled="true">
+      <Name>Localhost</Name>
+      <Targets>localhost; 127.0.0.1; ::1; 192.168.*.*; 10.*.*.*</Targets>
+      <Action type="Direct" />
+    </Rule>
+    <Rule enabled="true">
+      <Name>AI &amp; Dev Tools via SOCKS5</Name>
+      <Applications>curl; git; git-remote-https; node; Cursor; com.todesktop.230313mzl4w4u92</Applications>
+      <Targets>*.openai.com; *.anthropic.com; *.github.com; *.githubusercontent.com; *.googleapis.com</Targets>
+      <Ports>80, 443, 22</Ports>
+      <Action type="Proxy">100</Action>
+    </Rule>
+    <Rule enabled="true">
+      <Name>Block Telemetry</Name>
+      <Targets>telemetry.*; *.app-measurement.com</Targets>
+      <Action type="Block" />
+    </Rule>
+    <Rule enabled="true">
+      <Name>Default</Name>
+      <Action type="Direct" />
+    </Rule>
+  </RuleList>
+</ProxifierProfile>
