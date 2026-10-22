@@ -43,7 +43,15 @@ func goMenuAction(action C.int) {
 	case C.CF_TRAY_OPEN:
 		openConsole()
 	case C.CF_TRAY_QUIT:
+		// 只退出菜单栏图标，守护进程与代理配置保持不变
 		C.tray_stop()
+	case C.CF_TRAY_QUIT_STOP:
+		// 先让守护进程停止接管（恢复系统路由），再退出图标
+		go func() {
+			_ = post("/api/tun/stop")
+			time.Sleep(600 * time.Millisecond)
+			C.tray_stop()
+		}()
 	}
 }
 

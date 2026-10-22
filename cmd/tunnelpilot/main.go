@@ -385,6 +385,8 @@ func installTrayAgent(exeDir string) error {
 		return err
 	}
 
+	// KeepAlive 用 SuccessfulExit=false：异常崩溃才重新拉起，
+	// 用户主动「退出」时进程以 0 退出，不会被 launchd 再次唤醒。
 	plist := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -398,7 +400,12 @@ func installTrayAgent(exeDir string) error {
 	<key>RunAtLoad</key>
 	<true/>
 	<key>KeepAlive</key>
-	<true/>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+	<key>ThrottleInterval</key>
+	<integer>5</integer>
 </dict>
 </plist>
 `, trayExe)

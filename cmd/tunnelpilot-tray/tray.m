@@ -87,7 +87,12 @@ void tray_init(const char *title) {
 
 	[gMenu addItem:[NSMenuItem separatorItem]];
 
-	NSMenuItem *quit = [[NSMenuItem alloc] initWithTitle:@"退出 TunnelPilot" action:@selector(onItemClicked:) keyEquivalent:@"q"];
+	NSMenuItem *stopAndQuit = [[NSMenuItem alloc] initWithTitle:@"停止接管并退出" action:@selector(onItemClicked:) keyEquivalent:@""];
+	[stopAndQuit setTag:CF_TRAY_QUIT_STOP];
+	[stopAndQuit setTarget:gTarget];
+	[gMenu addItem:stopAndQuit];
+
+	NSMenuItem *quit = [[NSMenuItem alloc] initWithTitle:@"退出菜单栏图标" action:@selector(onItemClicked:) keyEquivalent:@"q"];
 	[quit setTag:CF_TRAY_QUIT];
 	[quit setTarget:gTarget];
 	[gMenu addItem:quit];
