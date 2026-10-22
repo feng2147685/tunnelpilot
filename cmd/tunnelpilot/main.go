@@ -169,6 +169,11 @@ func runStatus() {
 	fmt.Println("  默认网关:    ", orDash(st.DefaultGateway))
 	fmt.Println("  物理网卡:    ", orDash(st.PhysicalIf))
 	fmt.Println("  物理网关:    ", orDash(st.PhysicalGateway))
+	if netfix.HasDNSBackup() {
+		fmt.Println("  系统 DNS:    存在未恢复的备份（接管中，或异常退出残留）")
+	} else {
+		fmt.Println("  系统 DNS:    正常")
+	}
 	if len(st.TunRoutes) > 0 {
 		fmt.Println("  残留 TUN 路由:", len(st.TunRoutes), "条")
 	}
@@ -189,6 +194,13 @@ func runRestore() {
 		fmt.Fprintln(os.Stderr, "需要 root 权限，请用 sudo tunnelpilot restore")
 		os.Exit(1)
 	}
+	// 先恢复 DNS，再修路由：否则 DNS 仍指向已消失的虚拟网卡，域名全部解析失败
+	if n, dnsErr := netfix.RestoreDNSFromBackup(); dnsErr != nil {
+		fmt.Fprintln(os.Stderr, "恢复 DNS 失败:", dnsErr)
+	} else if n > 0 {
+		fmt.Printf("  已恢复 %d 个网络服务的 DNS\n", n)
+	}
+
 	actions, err := netfix.Restore()
 	for _, a := range actions {
 		fmt.Println("  " + a)
@@ -426,6 +438,10 @@ func installTrayAgent(exeDir string) error {
 func uninstallDaemon() error {
 	if os.Geteuid() != 0 {
 		return errors.New("卸载需要 root 权限，请用 sudo tunnelpilot uninstall")
+	}
+	// 防止守护进程没走正常退出流程时 DNS 残留在虚拟网卡上
+	if n, err := netfix.RestoreDNSFromBackup(); err == nil && n > 0 {
+		fmt.Printf("已恢复 %d 个网络服务的 DNS\n", n)
 	}
 	out, err := exec.Command("launchctl", "unload", "-w", plistPath).CombinedOutput()
 	if err != nil {

@@ -14,6 +14,7 @@ import (
 
 	"tunnelpilot/internal/config"
 	"tunnelpilot/internal/logx"
+	"tunnelpilot/internal/netfix"
 	"tunnelpilot/internal/proxy"
 	"tunnelpilot/internal/tunengine"
 )
@@ -27,12 +28,13 @@ type Manager struct {
 	dialer  *proxy.Dialer
 	logger  *logx.Logger
 
-	stack     tun.Stack
-	device    tun.Tun
-	cleanup   func()
-	running   bool
-	ifName    string
-	lastError string
+	stack      tun.Stack
+	device     tun.Tun
+	cleanup    func()
+	running    bool
+	ifName     string
+	lastError  string
+	dnsBackups []netfix.DNSBackup
 }
 
 func New(profileFn func() *config.Profile, handler *tunengine.Handler, dialer *proxy.Dialer, logger *logx.Logger) *Manager {
@@ -192,7 +194,35 @@ func (m *Manager) Start() error {
 	m.lastError = ""
 
 	m.logger.Info("全局流量已接管，虚拟网卡: ", name)
+
+	// 接管系统 DNS。系统 DNS 通常指向路由器（192.168.x.1），而自动路由会排除
+	// 局域网段，DNS 查询不会进入 utun，Fake-IP 与域名分流就无法工作。
+	dnsAddr := hijackDNSAddress(prefix)
+	if backups, dnsErr := netfix.OverrideDNS(dnsAddr.String()); dnsErr != nil {
+		m.logger.Warn("系统 DNS 接管失败，域名分流不会生效: ", dnsErr)
+	} else {
+		m.dnsBackups = backups
+		m.logger.Info("系统 DNS 已接管 → ", dnsAddr.String())
+	}
+
 	return nil
+}
+
+// hijackDNSAddress 取网段倒数第二个地址作为 DNS 入口，
+// 避开 Fake-IP 池（从网段低位开始分配）。
+func hijackDNSAddress(prefix netip.Prefix) netip.Addr {
+	addr := prefix.Masked().Addr()
+	if !addr.Is4() {
+		return addr
+	}
+	b := addr.As4()
+	v := uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3])
+	hostBits := 32 - prefix.Bits()
+	if hostBits <= 1 || hostBits > 30 {
+		return addr
+	}
+	v += (uint32(1) << hostBits) - 2
+	return netip.AddrFrom4([4]byte{byte(v >> 24), byte(v >> 16), byte(v >> 8), byte(v)})
 }
 
 // Stop 停止接管并恢复系统路由
@@ -204,6 +234,14 @@ func (m *Manager) Stop() error {
 	}
 
 	var errs []string
+
+	// 先恢复 DNS，再拆网卡，避免中间态导致系统无法解析域名
+	if len(m.dnsBackups) > 0 {
+		netfix.RestoreDNS(m.dnsBackups)
+		m.dnsBackups = nil
+		m.logger.Info("系统 DNS 已恢复")
+	}
+
 	if m.stack != nil {
 		if err := m.stack.Close(); err != nil {
 			errs = append(errs, err.Error())
