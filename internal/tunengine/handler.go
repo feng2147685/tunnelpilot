@@ -203,7 +203,16 @@ func (h *Handler) describeAction(a config.RuleAction, profile *config.Profile) s
 	return a.Type
 }
 
+// udpProtocolNumber 是 IP 协议号里的 UDP（RFC 1700）。
+const udpProtocolNumber = 17
+
+// JudgeFlow 决定一条新流的处置方式。
+// 只有在这里返回 ActionHijackDNS，sing-tun 才会把 DNS 报文交给 NewDNSPacket；
+// 之前这里无条件返回 ActionAccept，导致 DNS 劫持（以及整个 Fake-IP 分流）从未生效。
 func (h *Handler) JudgeFlow(network uint8, source netip.AddrPort, destination netip.AddrPort, firstPacket []byte) tun.FlowVerdict {
+	if network == udpProtocolNumber && destination.Port() == 53 {
+		return tun.FlowVerdict{Action: tun.ActionHijackDNS}
+	}
 	return tun.FlowVerdict{Action: tun.ActionAccept}
 }
 
