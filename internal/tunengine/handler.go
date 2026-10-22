@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"strings"
 	"sync"
 	"time"
 
@@ -217,7 +218,9 @@ func (h *Handler) NewDNSPacket(payload []byte, source M.Socksaddr, destination M
 	}
 	question := msg.Question[0]
 	name := dns.Fqdn(question.Name)
-	domain := question.Name
+	// DNS 报文里的域名是 FQDN，带末尾点（www.google.com.），
+	// 而规则里的通配符不带点，不裁掉的话 *.google.com 永远匹配不上。
+	domain := strings.TrimSuffix(name, ".")
 	profile := h.rules.Profile()
 
 	ident := h.resolver.Lookup(source.Port, true)
