@@ -210,7 +210,7 @@ async function loadStatus(){
   const r = await fetch('/api/status').then(x=>x.json());
   document.getElementById('dot').className = 'dot '+(r.running?'on':'off');
   document.getElementById('statusText').textContent =
-    (r.running?'运行中':'已停止') + ' · PID ' + r.pid + ' · UID ' + r.uid;
+    (r.running?'运行中':r.fakeip_compatibility?'已停止 · 缓存连接直连兼容':'已停止') + ' · PID ' + r.pid + ' · UID ' + r.uid;
   document.getElementById('statRun').textContent = r.running?'已接管':'未启动';
   document.getElementById('statTun').textContent = r.tun_name||'—';
   document.getElementById('statUp').textContent = r.uptime||'—';

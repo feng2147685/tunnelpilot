@@ -154,7 +154,7 @@ func main() {
 	waitSignal()
 
 	if tunManager != nil {
-		if err = tunManager.Stop(); err != nil {
+		if err = tunManager.Close(); err != nil {
 			logger.Error("退出时清理失败: ", err)
 		}
 	}

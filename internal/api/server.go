@@ -98,6 +98,8 @@ func writeError(w http.ResponseWriter, code int, msg string) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }
 
+// handleStatus 返回接管与缓存兼容状态，供菜单栏和控制台区分全局接管与旧地址直连。
+// param w/r 为 HTTP 响应和请求；写出状态 JSON，无网络配置副作用。
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	var running bool
 	var tunName string
@@ -109,12 +111,13 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	listen := s.profile.ListenPort
 	s.mu.RUnlock()
 	writeJSON(w, map[string]any{
-		"running":  running,
-		"tun_name": tunName,
-		"uptime":   formatUptime(time.Since(s.startedAt)),
-		"pid":      os.Getpid(),
-		"uid":      os.Getuid(),
-		"listen":   listen,
+		"fakeip_compatibility": s.compatibility(),
+		"running":              running,
+		"tun_name":             tunName,
+		"uptime":               formatUptime(time.Since(s.startedAt)),
+		"pid":                  os.Getpid(),
+		"uid":                  os.Getuid(),
+		"listen":               listen,
 	})
 }
 
@@ -134,6 +137,8 @@ func (s *Server) handleTUNStart(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"ok": true, "running": true, "tun_name": s.tun.InterfaceName()})
 }
 
+// handleTUNStop 停止全局接管并保留缓存地址兼容，错误时返回非成功状态。
+// param w/r 为 HTTP 响应和请求；写出操作结果与兼容状态。
 func (s *Server) handleTUNStop(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost && r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "不支持的方法")
@@ -147,7 +152,7 @@ func (s *Server) handleTUNStop(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, map[string]any{"ok": true, "running": false})
+	writeJSON(w, map[string]any{"ok": true, "running": false, "fakeip_compatibility": s.compatibility()})
 }
 
 // formatUptime 把时长转成「1 天 2 小时」「3 分 5 秒」这类可读文本
@@ -315,4 +320,11 @@ func LoadProfile(path string) (*config.Profile, error) {
 		return nil, err
 	}
 	return &p, nil
+}
+
+// compatibility 兼容不支持缓存状态的旧控制器实现。
+// param 无；返回是否存在 Fake-IP 直连兼容通道，旧控制器返回 false。
+func (s *Server) compatibility() bool {
+	controller, ok := s.tun.(interface{ Compatibility() bool })
+	return ok && controller.Compatibility()
 }

@@ -30,26 +30,31 @@ type Manager struct {
 	dialer  *proxy.Dialer
 	logger  *logx.Logger
 
-	stack      tun.Stack
-	device     tun.Tun
-	cleanup    func() error
-	cancel     context.CancelFunc
-	restoreDNS func([]netfix.DNSBackup) error
-	running    bool
-	ifName     string
-	lastError  string
-	dnsBackups []netfix.DNSBackup
+	stack         tun.Stack
+	device        tun.Tun
+	cleanup       func() error
+	cancel        context.CancelFunc
+	restoreDNS    func([]netfix.DNSBackup) error
+	overrideDNS   func(string) ([]netfix.DNSBackup, error)
+	routes        *routeSet
+	options       tun.Options
+	compatibility bool
+	running       bool
+	ifName        string
+	lastError     string
+	dnsBackups    []netfix.DNSBackup
 }
 
 // New 组装 TUN 生命周期管理，依赖配置快照、转发器、拨号器及日志。
 // param profileFn/handler/dialer/logger 为所需服务；返回管理器，此时不修改网络。
 func New(profileFn func() *config.Profile, handler *tunengine.Handler, dialer *proxy.Dialer, logger *logx.Logger) *Manager {
 	return &Manager{
-		profile:    profileFn,
-		handler:    handler,
-		dialer:     dialer,
-		logger:     logger,
-		restoreDNS: netfix.RestoreDNS,
+		profile:     profileFn,
+		handler:     handler,
+		dialer:      dialer,
+		logger:      logger,
+		restoreDNS:  netfix.RestoreDNS,
+		overrideDNS: netfix.OverrideDNS,
 	}
 }
 
@@ -91,6 +96,9 @@ func (m *Manager) Start() (startErr error) {
 		return nil
 	}
 
+	if m.compatibility {
+		return m.resumeLocked()
+	}
 	if len(m.dnsBackups) > 0 || netfix.HasDNSBackup() {
 		return fmt.Errorf("存在未恢复的 DNS 配置，请先停止接管或执行 sudo tunnelpilot restore")
 	}
@@ -228,6 +236,23 @@ func (m *Manager) Start() (startErr error) {
 		closeOnFailure("网络变化监听", networkMonitor.Close)
 		return fmt.Errorf("读取虚拟网卡名称失败: %w", err)
 	}
+	routes, err := newRouteSet(options)
+	if err == nil {
+		// sing-tun v0.9.6 的 UpdateRouteOptions 先覆盖旧参数再删路由，不能用于切换范围。
+		// 仅关闭库的自动清理，原路由范围由本实例精确跟踪；不调用库的范围切换。
+		external := options
+		external.EXP_ExternalConfiguration = true
+		err = device.UpdateRouteOptions(external)
+	}
+	if err != nil {
+		cancel()
+		closeOnFailure("协议栈", stack.Close)
+		closeOnFailure("虚拟网卡", device.Close)
+		closeOnFailure("默认网卡监听", interfaceMonitor.Close)
+		closeOnFailure("网络变化监听", networkMonitor.Close)
+		return fmt.Errorf("初始化路由生命周期失败: %w", err)
+	}
+	m.routes, m.options = routes, options
 	m.cancel = cancel
 	m.stack = stack
 	m.device = device
@@ -243,10 +268,10 @@ func (m *Manager) Start() (startErr error) {
 	// 接管系统 DNS。系统 DNS 通常指向路由器（192.168.x.1），而自动路由会排除
 	// 局域网段，DNS 查询不会进入 utun，Fake-IP 与域名分流就无法工作。
 	dnsAddr := hijackDNSAddress(prefix)
-	if backups, dnsErr := netfix.OverrideDNS(dnsAddr.String()); dnsErr != nil {
+	if backups, dnsErr := m.overrideDNS(dnsAddr.String()); dnsErr != nil {
 		m.dnsBackups = backups
 		m.lastError = dnsErr.Error()
-		if stopErr := m.stopLocked(); stopErr != nil {
+		if stopErr := m.shutdownLocked(); stopErr != nil {
 			return fmt.Errorf("DNS 接管失败: %w；清理失败: %v", dnsErr, stopErr)
 		}
 		return fmt.Errorf("DNS 接管失败，已取消接管: %w", dnsErr)
@@ -270,17 +295,41 @@ func hijackDNSAddress(prefix netip.Prefix) netip.Addr {
 }
 
 // Stop 停止接管并恢复系统路由。
-// param 无；返回 DNS 或资源清理错误，DNS 未恢复时禁止提前拆除网卡。
+// param 无；返回 DNS 或路由切换错误，成功后保留专用网段处理应用缓存的假地址。
 func (m *Manager) Stop() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.stopLocked()
+	if !m.running {
+		return nil
+	}
+	if m.routes == nil {
+		return m.shutdownLocked()
+	}
+	if len(m.dnsBackups) > 0 {
+		if err := m.restoreDNS(m.dnsBackups); err != nil {
+			m.lastError = err.Error()
+			return err
+		}
+		m.dnsBackups = nil
+	}
+	// 已有映射不能随网卡消失。后续命中假地址的连接只直连，不再应用代理/阻断规则。
+	m.handler.SetBypass(true)
+	if err := m.routes.pause(); err != nil {
+		m.handler.SetBypass(false)
+		m.lastError = err.Error()
+		return err
+	}
+	m.running = false
+	m.compatibility = true
+	m.lastError = ""
+	m.logger.Info("已停止全局接管，系统 DNS 已恢复；保留 Fake-IP 缓存直连兼容")
+	return nil
 }
 
-// stopLocked 在持有启停锁时恢复 DNS 并拆除 TUN；DNS 恢复失败时保留会话和备份供重试。
+// shutdownLocked 在持锁状态下彻底释放网卡与兼容路由，仅用于退出或启动回滚。
 // param 无；返回清理错误，错误状态会保存供诊断。
-func (m *Manager) stopLocked() error {
-	if !m.running {
+func (m *Manager) shutdownLocked() error {
+	if m.device == nil && !m.running {
 		return nil
 	}
 
@@ -299,6 +348,11 @@ func (m *Manager) stopLocked() error {
 	// DNS 已恢复后取消所有活跃流，避免停用后仍有拨号和转发挂起。
 	if m.cancel != nil {
 		m.cancel()
+	}
+	if m.routes != nil {
+		if err := m.routes.close(); err != nil {
+			errs = append(errs, err.Error())
+		}
 	}
 	if m.stack != nil {
 		if err := m.stack.Close(); err != nil {
@@ -321,6 +375,11 @@ func (m *Manager) stopLocked() error {
 	m.device = nil
 	m.cleanup = nil
 	m.running = false
+	m.compatibility = false
+	if m.handler != nil {
+		m.handler.SetBypass(false)
+	}
+	m.routes = nil
 	m.ifName = ""
 
 	if len(errs) > 0 {
@@ -373,4 +432,35 @@ func detectPhysicalInterface() string {
 		}
 	}
 	return ""
+}
+
+// Compatibility 查询是否仅为应用缓存的 Fake-IP 保留直连通道。
+// param 无；返回兼容状态，此时系统 DNS 与全局路由均不再接管。
+func (m *Manager) Compatibility() bool { m.mu.Lock(); defer m.mu.Unlock(); return m.compatibility }
+
+// Close 供守护进程退出时彻底释放资源；普通停止应使用 Stop 保留缓存兼容。
+// param 无；返回 DNS 或清理错误，DNS 恢复失败时保留网卡及备份。
+func (m *Manager) Close() error { m.mu.Lock(); defer m.mu.Unlock(); return m.shutdownLocked() }
+
+// resumeLocked 从缓存兼容状态恢复全局路由及 DNS，复用同一映射表和网络栈。
+// param 无；返回恢复错误，失败退回缓存直连模式，保留所有必要的恢复信息。
+func (m *Manager) resumeLocked() error {
+	if len(m.dnsBackups) > 0 {
+		return fmt.Errorf("DNS 回滚尚未完成，请先退出并恢复网络")
+	}
+	if err := m.routes.resume(); err != nil {
+		rollback := m.routes.pause()
+		return errors.Join(err, rollback)
+	}
+	m.handler.SetBypass(false)
+	backups, err := m.overrideDNS(hijackDNSAddress(m.options.Inet4Address[0]).String())
+	m.dnsBackups = backups
+	if err != nil {
+		m.handler.SetBypass(true)
+		return errors.Join(err, m.routes.pause())
+	}
+	m.compatibility = false
+	m.running = true
+	m.lastError = ""
+	return nil
 }

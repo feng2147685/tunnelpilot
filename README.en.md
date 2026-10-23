@@ -147,3 +147,9 @@ You are responsible for complying with the laws of your jurisdiction.
 - [sing-tun](https://github.com/SagerNet/sing-tun) — utun abstraction and Darwin implementation
 - [gVisor](https://gvisor.dev/) — userspace TCP/IP stack
 - [miekg/dns](https://github.com/miekg/dns) — DNS message handling
+
+## Stopping interception
+
+Stopping restores system DNS and removes the global TUN routes. A route for the Fake-IP subnet and its mapping table remain available to translate cached addresses into direct connections. The status API reports `running: false` and `fakeip_compatibility: true`; new cached-address connections bypass routing rules, while existing connections may finish normally. Starting again reuses the same stack and mappings.
+
+The daemon releases all routes and the interface when it exits. Mappings are currently kept in memory only, so daemon upgrades, restarts, and crashes may still require affected applications to refresh their DNS cache. Native macOS route changes and Upnet behavior require separate validation after updating.

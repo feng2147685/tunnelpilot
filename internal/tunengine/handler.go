@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sagernet/sing-tun"
@@ -53,6 +54,7 @@ type Handler struct {
 
 	records map[uint64]*Record
 	nextID  uint64
+	bypass  atomic.Bool
 }
 
 // NewHandler 组装进程识别、规则、出站与 Fake-IP 服务，供 TUN 栈调用。
@@ -168,6 +170,14 @@ func (h *Handler) decide(flowCtx context.Context, isUDP bool, source, destinatio
 			// 旧 DNS 缓存或未知 Fake-IP 不能当作真实公网地址拨出。
 			return decision{ident: ident, blocked: true, action: config.RuleAction{Type: config.ActionBlock}}
 		}
+	}
+
+	if h.bypass.Load() {
+		// 兼容通道只处理已分配假地址，禁止扩展为隐式全局代理或继续应用阻断规则。
+		if domain == "" {
+			return decision{ident: ident, blocked: true, action: config.RuleAction{Type: config.ActionBlock}}
+		}
+		return decision{ident: ident, domain: domain, target: net.JoinHostPort(domain, fmt.Sprint(port)), rule: "Fake-IP 缓存直连", action: config.RuleAction{Type: config.ActionDirect}}
 	}
 
 	ctx := rule.Context{
@@ -506,3 +516,7 @@ func withDefault(s, fallback string) string {
 	}
 	return s
 }
+
+// SetBypass 控制缓存兼容模式，模式仅影响新流，已存在连接允许自然结束。
+// param enabled 为兼容标志；无返回值，使用原子操作与连接决策并发安全。
+func (h *Handler) SetBypass(enabled bool) { h.bypass.Store(enabled) }

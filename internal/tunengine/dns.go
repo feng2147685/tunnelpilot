@@ -47,6 +47,13 @@ func (h *Handler) dnsResponse(ctx context.Context, payload []byte) ([]byte, erro
 	switch {
 	case question.Qclass != dns.ClassINET:
 		resp.Rcode = dns.RcodeRefused
+	case h.bypass.Load():
+		upstream, err := h.dialer.ExchangeDNS(ctx, query)
+		if err != nil {
+			resp.Rcode = dns.RcodeServerFailure
+		} else {
+			resp = upstream
+		}
 	case question.Qtype == dns.TypeA:
 		// 系统 DNS 常由 mDNSResponder 发起，此时没有真实应用和目标端口，不能提前按业务规则阻断或直连。
 		domain := strings.ToLower(strings.TrimSuffix(question.Name, "."))

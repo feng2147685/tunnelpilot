@@ -22,10 +22,12 @@ import (
 
 const apiBase = "http://127.0.0.1:9090"
 
+// statusResponse 描述守护进程状态，兼容模式下不再接管全局流量。
 type statusResponse struct {
-	Running bool   `json:"running"`
-	TunName string `json:"tun_name"`
-	UID     int    `json:"uid"`
+	Compatibility bool   `json:"fakeip_compatibility"`
+	Running       bool   `json:"running"`
+	TunName       string `json:"tun_name"`
+	UID           int    `json:"uid"`
 }
 
 var (
@@ -86,6 +88,8 @@ func main() {
 	C.tray_run()
 }
 
+// refresh 刷新菜单栏状态，缓存兼容与全局接管分别显示。
+// param 无；后台不可达时显示错误，不更改系统网络。
 func refresh() {
 	mu.Lock()
 	wasBusy := busy
@@ -118,6 +122,8 @@ func refresh() {
 	}
 	if running {
 		render(true, false, "已接管全局流量 · "+status.TunName, "停止接管")
+	} else if status.Compatibility {
+		render(false, false, "已停止接管 · 缓存连接直连兼容", "启动接管")
 	} else {
 		render(false, false, "未接管流量（系统直连）", "启动接管")
 	}
