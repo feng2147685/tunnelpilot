@@ -206,6 +206,14 @@ func (h *Handler) describeAction(a config.RuleAction, profile *config.Profile) s
 // udpProtocolNumber 是 IP 协议号里的 UDP（RFC 1700）。
 const udpProtocolNumber = 17
 
+// makeDNSBuffer 把 DNS 响应报文包成 sing 的 buffer。
+// 每次写回都要新的一份，因为 WritePacket 内部会 Release 传入的 buffer。
+func makeDNSBuffer(data []byte) *buf.Buffer {
+	b := buf.NewSize(len(data))
+	b.Write(data)
+	return b
+}
+
 // JudgeFlow 决定一条新流的处置方式。
 // 只有在这里返回 ActionHijackDNS，sing-tun 才会把 DNS 报文交给 NewDNSPacket；
 // 之前这里无条件返回 ActionAccept，导致 DNS 劫持（以及整个 Fake-IP 分流）从未生效。
@@ -275,9 +283,21 @@ func (h *Handler) NewDNSPacket(payload []byte, source M.Socksaddr, destination M
 	if err != nil {
 		return
 	}
-	buffer := buf.NewSize(len(data))
-	buffer.Write(data)
-	_ = writer.WritePacket(buffer, source)
+
+	// UDPBackWriter 内部把 WritePacket 的参数当作「响应包的源地址」来查路由：
+	//   FindRoute(nic, AddressFromAddr(destination.Addr), w.source, ...)
+	// 而 w.source 存的正是客户端地址，若这里也传 source，local 与 remote 相同，
+	// 路由自环导致响应发不出去（表现为客户端反复重试、解析超时）。
+	// 因此优先传 destination（DNS 入口地址），失败再回退到 source。
+	werr := writer.WritePacket(makeDNSBuffer(data), destination)
+	if werr != nil {
+		h.log("DNS 响应写回失败(%s)，改用 source 重试: %v", domain, werr)
+		werr = writer.WritePacket(makeDNSBuffer(data), source)
+	}
+	if werr != nil {
+		h.log("DNS 响应写回彻底失败 %s: %v", domain, werr)
+		return
+	}
 
 	h.log("DNS %s (来自 %s) -> %s，动作: %s", domain, ident.Name, answerSummary(resp), h.describeAction(m.Action, profile))
 }

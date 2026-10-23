@@ -209,11 +209,24 @@ func (m *Manager) Start() error {
 }
 
 // hijackDNSAddress 返回作为 DNS 入口的地址。
-// 必须用 TUN 接口自身配置的地址（即网段首地址），这样 gVisor 才认为
-// 该数据报是发给本机的；用网段内其它地址会被协议栈直接丢弃。
-// Fake-IP 池从 offset 1 开始分配，不会与之冲突。
+//
+// 不能与 TUN 接口地址相同（网段首地址）：客户端查询该地址时，
+// 源地址由路由决定，也会是网段首地址，写回响应时 FindRoute 的
+// local 与 remote 相同，路由自环导致响应发不出去。
+// 这里取网段倒数第二个地址，既在 TUN 的路由范围内，又避开从低位递增分配的 Fake-IP 池。
 func hijackDNSAddress(prefix netip.Prefix) netip.Addr {
-	return prefix.Masked().Addr()
+	addr := prefix.Masked().Addr()
+	if !addr.Is4() {
+		return addr
+	}
+	b := addr.As4()
+	v := uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3])
+	hostBits := 32 - prefix.Bits()
+	if hostBits <= 1 || hostBits > 30 {
+		return addr
+	}
+	v += (uint32(1) << hostBits) - 2
+	return netip.AddrFrom4([4]byte{byte(v >> 24), byte(v >> 16), byte(v >> 8), byte(v)})
 }
 
 // Stop 停止接管并恢复系统路由
