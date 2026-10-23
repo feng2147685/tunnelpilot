@@ -23,6 +23,10 @@ Go + cgo，不需要 Xcode 和 Apple 开发者账号。
 ## 设计原则
 
 - **内核只做路由，策略全在用户态**。规则引擎、DNS、进程识别都在 Go 里，方便改和测。
+- **DNS 层不做分流决策**。DNS 查询基本都由 `mDNSResponder` 代发，拿到的进程是它、端口是随机的，
+  此时并不知道真正发起请求的应用和目标端口。所以 A 查询一律返回 Fake-IP，
+  分流判断全部推迟到 TCP/UDP 连接建立时——用真实进程 + 从 Fake-IP 反查出的域名来决策。
+  想「直连域名就回真实 IP」是错的，前提本身不成立。
 - **改了就一定恢复**。动系统 DNS、路由、LaunchAgent 之前先备份，退出/崩溃/卸载都要能还原。
 - **失败必须可见**。不允许 `_ = doSomething()` 这种吞错误的写法，宁可日志吵一点。
 - **日志不记录隐私**。域名、URL、token 一律截断或脱敏，日志可能被贴到 issue 里。
@@ -47,7 +51,7 @@ Go + cgo，不需要 Xcode 和 Apple 开发者账号。
 | 规则引擎（进程/域名/IP/端口） | 单元测试覆盖 |
 | 代理协议（SOCKS5/SOCKS4a/HTTPS） | 已验证 |
 | 代理链（串联/主备/轮询） | 代码完成，未充分实测 |
-| Fake-IP + DNS 劫持 | **刚打通，待实测** |
+| Fake-IP + DNS 劫持 | 已验证（UDP + TCP DNS，A 记录统一 Fake-IP，AAAA 返回空） |
 | UDP 走代理（SOCKS5） | 代码完成，未实测 |
 | Web 控制台 | 已验证 |
 | 菜单栏 + launchd 常驻 | 已验证 |
@@ -110,6 +114,9 @@ go test -tags with_gvisor ./internal/rule ./internal/config ./internal/fakeip ./
 | DNS 有日志但客户端超时 | `UDPBackWriter` 把 `WritePacket` 入参当作**响应源地址**去查路由，传客户端地址会导致 local == remote |
 | 菜单栏点退出又自己回来 | LaunchAgent `KeepAlive` 写死 `true`，应为 `SuccessfulExit=false` |
 | git 忽略整个源码目录 | `.gitignore` 写 `tunnelpilot` 会匹配 `cmd/tunnelpilot/`，必须用前导斜杠 `/tunnelpilot` |
+| 直连域名解析结果不稳定 | 在 DNS 阶段按规则返回真实 IP。查询来自 mDNSResponder，进程与端口都不可信，等于用错误前提做决策 |
+| 停止接管后偶发全断 | Stop 时 DNS 恢复失败仍继续拆网卡。应保留 TUN 与备份供重试，恢复成功后才拆 |
+| 状态叠加导致启停异常 | Start 前未检查是否还有 `dns-backup.json` 残留 |
 
 ## 排查方法论（重要）
 
