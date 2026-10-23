@@ -28,6 +28,8 @@ static void cf_lookup_port(cf_proc_result *out, int target_port, int want_udp) {
 	int count = proc_listallpids(pids, (int)sizeof(pids));
 	if (count <= 0) return;
 
+	// 进程数量可能在两次系统调用间增长，不能越过固定数组边界。
+	if (count > (int)(sizeof(pids) / sizeof(pids[0]))) count = (int)(sizeof(pids) / sizeof(pids[0]));
 	for (int i = 0; i < count; i++) {
 		int pid = pids[i];
 		if (pid <= 0) continue;
@@ -89,20 +91,22 @@ import (
 
 // Identity 描述一条连接背后的 macOS 进程。
 type Identity struct {
-	PID       int32
-	Name      string
-	Path      string
+	PID        int32
+	Name       string
+	Path       string
 	ResolvedAt time.Time
 }
 
 // Resolver 按本地端口反查进程，带短时缓存，避免高频遍历全系统 fd。
 type Resolver struct {
-	mu      sync.Mutex
-	cache   map[uint64]Identity
-	ttl     time.Duration
+	mu       sync.Mutex
+	cache    map[uint64]Identity
+	ttl      time.Duration
 	negative map[uint64]time.Time
 }
 
+// NewResolver 创建短时缓存的进程识别器。
+// param ttl 为正负缓存期限，非正数使用三秒；返回依赖 libproc 的解析器。
 func NewResolver(ttl time.Duration) *Resolver {
 	if ttl <= 0 {
 		ttl = 3 * time.Second
@@ -115,7 +119,7 @@ func NewResolver(ttl time.Duration) *Resolver {
 }
 
 // Lookup 根据本地端口与协议反查进程。isUDP 区分 TCP/UDP。
-// 返回零值时表示未能定位到进程。
+// param localPort/isUDP 为源端口及协议；返回零值时表示未能定位到进程，失败缓存到期后重新查询。
 func (r *Resolver) Lookup(localPort uint16, isUDP bool) Identity {
 	key := (uint64(localPort) << 1)
 	if isUDP {
@@ -127,9 +131,13 @@ func (r *Resolver) Lookup(localPort uint16, isUDP bool) Identity {
 		r.mu.Unlock()
 		return id
 	}
-	if _, ok := r.negative[key]; ok {
-		r.mu.Unlock()
-		return Identity{}
+	if missedAt, ok := r.negative[key]; ok {
+		// 失败缓存必须过期，否则短连接复用该端口后永远无法识别应用。
+		if time.Since(missedAt) < r.ttl {
+			r.mu.Unlock()
+			return Identity{}
+		}
+		delete(r.negative, key)
 	}
 	r.mu.Unlock()
 
@@ -155,6 +163,8 @@ func (r *Resolver) Lookup(localPort uint16, isUDP bool) Identity {
 	return id
 }
 
+// boolToInt 为 libproc 包装转换协议标志。
+// param b 为布尔值；返回 C 整数 1 或 0，无失败分支。
 func boolToInt(b bool) C.int {
 	if b {
 		return 1

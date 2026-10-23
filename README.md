@@ -125,12 +125,27 @@ libproc 反查进程 + Fake-IP 还原域名
 
 出站 socket 绑定物理网卡（`IP_BOUND_IF`），避免流量被全局路由重新送回 utun 形成环路；回环地址（本地代理）不绑定。
 
+## 网络修复版验证
+
+源码中的修复尚未代表已安装服务或 Release 包已更新。可先运行不修改系统网络的检查：
+
+```bash
+go test -race -tags with_gvisor ./internal/tunengine ./internal/proxy ./internal/netfix ./internal/fakeip ./internal/rule ./internal/proc ./internal/config ./internal/tunmgr
+./build.sh
+```
+
+这些检查覆盖回环 TCP/UDP、SOCKS5 UDP 中继、代理握手期限、TCP 半关闭、DNS 报文与备份恢复失败，不创建 utun，不改变系统 DNS 或路由。
+
+实际接管仍需单独验证：确认本地代理已运行，开启接管，分别检查直连网站、代理网站及指定应用；用普通 DNS 和 TCP DNS 查询同一域名，再确认控制台命中的规则及实际访问结果。最后停止接管，确认原 DNS 配置和普通网络访问恢复。接管或恢复报错时保留日志与 DNS 备份，使用 `sudo tunnelpilot restore` 重试。
+
+DNS 的 A 查询先保留域名映射，再在连接阶段结合真实应用、目标端口决定动作。直连目标、代理服务器域名及必要的 IP/CIDR 判断通过绑定网卡的独立上游解析，避免再次查询被接管的系统 DNS。当前独立上游为 `223.5.5.5` 与 `119.29.29.29`；使用内部 DNS 或无法访问公共 DNS 的网络仍需另行验证。修改 Fake-IP 网段后需重启整个守护进程。
+
 ## 已知限制
 
-- UDP 走代理仅支持 SOCKS5，HTTPS / SOCKS4 下的 UDP 会回退直连
+- UDP 走代理仅支持 SOCKS5；HTTPS / SOCKS4、代理链或关联失败时会结束 UDP 会话，不会自动改成直连。使用 HTTP 代理时，依赖 QUIC 的应用需自行回退 TCP
 - 进程识别依赖源端口反查，极短命的连接可能识别不到
 - 修改代理服务器地址后需重启服务
-- 未实现 IPv6 分流
+- 未实现 IPv6 分流；接管 DNS 时 AAAA 查询返回空记录，使用 A 记录进行 IPv4 分流。这不能覆盖绕过系统 DNS 的 DoH 或直接 IPv6 连接
 
 ## 免责声明
 

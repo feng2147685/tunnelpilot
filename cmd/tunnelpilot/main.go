@@ -40,6 +40,8 @@ var appIconData []byte
 
 var apiServer *api.Server
 
+// main 解析命令并组装控制台与 TUN 守护进程。
+// param 由命令行提供；无返回值，启动及退出清理错误写入日志，管理界面仅监听本机。
 func main() {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
@@ -121,8 +123,8 @@ func main() {
 	})
 
 	go func() {
-		addr := fmt.Sprintf(":%d", profile.ListenPort)
-		logger.Info("管理界面已启动: http://127.0.0.1", addr)
+		addr := fmt.Sprintf("127.0.0.1:%d", profile.ListenPort)
+		logger.Info("管理界面已启动: http://", addr)
 		if err := http.ListenAndServe(addr, apiServer.Handler()); err != nil {
 			logger.Error("管理界面启动失败: ", err)
 		}
@@ -189,13 +191,16 @@ func runStatus() {
 	fmt.Println("如需修复请执行: sudo tunnelpilot restore")
 }
 
+// runRestore 按 DNS、路由的顺序执行管理员恢复，任何 DNS 残留都会返回非零退出码。
+// param 无；无返回值，失败输出明确错误并保留 DNS 备份供重试。
 func runRestore() {
 	if os.Geteuid() != 0 {
 		fmt.Fprintln(os.Stderr, "需要 root 权限，请用 sudo tunnelpilot restore")
 		os.Exit(1)
 	}
 	// 先恢复 DNS，再修路由：否则 DNS 仍指向已消失的虚拟网卡，域名全部解析失败
-	if n, dnsErr := netfix.RestoreDNSFromBackup(); dnsErr != nil {
+	n, dnsErr := netfix.RestoreDNSFromBackup()
+	if dnsErr != nil {
 		fmt.Fprintln(os.Stderr, "恢复 DNS 失败:", dnsErr)
 	} else if n > 0 {
 		fmt.Printf("  已恢复 %d 个网络服务的 DNS\n", n)
@@ -209,7 +214,11 @@ func runRestore() {
 		fmt.Fprintln(os.Stderr, "恢复失败:", err)
 		os.Exit(1)
 	}
-	fmt.Println("网络已恢复。若仍无法上网，请关闭并重新打开 Wi-Fi。")
+	if dnsErr != nil {
+		fmt.Fprintln(os.Stderr, "路由已处理，但 DNS 尚未恢复；备份已保留，请重试 restore。")
+		os.Exit(1)
+	}
+	fmt.Println("网络配置已恢复。若仍无法上网，请关闭并重新打开 Wi-Fi。")
 }
 
 func orDash(s string) string {
@@ -435,12 +444,16 @@ func installTrayAgent(exeDir string) error {
 	return nil
 }
 
+// uninstallDaemon 在恢复 DNS 后移除守护进程与菜单栏应用。
+// param 无；返回权限、恢复或卸载错误，DNS 恢复失败时保留服务与原始备份。
 func uninstallDaemon() error {
 	if os.Geteuid() != 0 {
 		return errors.New("卸载需要 root 权限，请用 sudo tunnelpilot uninstall")
 	}
 	// 防止守护进程没走正常退出流程时 DNS 残留在虚拟网卡上
-	if n, err := netfix.RestoreDNSFromBackup(); err == nil && n > 0 {
+	if n, err := netfix.RestoreDNSFromBackup(); err != nil {
+		return fmt.Errorf("卸载前恢复 DNS 失败，已保留服务和备份供重试: %w", err)
+	} else if n > 0 {
 		fmt.Printf("已恢复 %d 个网络服务的 DNS\n", n)
 	}
 	out, err := exec.Command("launchctl", "unload", "-w", plistPath).CombinedOutput()

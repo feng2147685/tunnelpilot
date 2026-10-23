@@ -127,10 +127,10 @@ Outbound sockets are bound to the physical interface (`IP_BOUND_IF`) so they are
 
 ## Limitations
 
-- UDP proxying supports SOCKS5 only; falls back to direct for HTTPS / SOCKS4 proxies
+- UDP proxying supports SOCKS5 only. Unsupported proxies, proxy chains, or failed associations end the UDP session without falling back to a direct connection.
 - Process lookup relies on reverse port matching, so very short-lived connections may not resolve
 - Changing a proxy address requires a service restart
-- IPv6 routing rules are not implemented
+- IPv6 routing rules are not implemented. Intercepted AAAA queries return no records to prefer IPv4; this does not cover DoH or direct IPv6 traffic.
 
 ## Disclaimer
 

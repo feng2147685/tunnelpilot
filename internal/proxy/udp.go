@@ -23,11 +23,13 @@ type UDPRelay struct {
 
 // SupportsUDP 判断某个代理服务器是否支持 UDP 转发。
 // 目前只有 SOCKS5 支持（HTTP CONNECT 只能承载 TCP）。
+// param server 为代理配置；返回协议能力，未知协议返回 false。
 func SupportsUDP(server config.ProxyServer) bool {
 	return server.Protocol == config.ProtocolSOCKS5
 }
 
-// AssociateUDP 与 SOCKS5 服务器建立 UDP 关联，返回可收发的中继
+// AssociateUDP 与 SOCKS5 服务器建立 UDP 关联，返回可收发的中继。
+// param ctx/server 为期限及代理配置；返回中继，握手、解析或建连失败关闭控制连接。
 func (d *Dialer) AssociateUDP(ctx context.Context, server config.ProxyServer) (*UDPRelay, error) {
 	ctrl, err := d.newNetDialer().DialContext(ctx, "tcp",
 		net.JoinHostPort(server.Address, strconv.Itoa(int(server.Port))))
@@ -35,6 +37,12 @@ func (d *Dialer) AssociateUDP(ctx context.Context, server config.ProxyServer) (*
 		return nil, fmt.Errorf("连接代理 %s:%d 失败: %w", server.Address, server.Port, err)
 	}
 
+	finish, err := beginHandshake(ctx, ctrl)
+	if err != nil {
+		ctrl.Close()
+		return nil, err
+	}
+	defer finish()
 	if err = socks5Auth(ctrl, server); err != nil {
 		ctrl.Close()
 		return nil, err
@@ -51,6 +59,10 @@ func (d *Dialer) AssociateUDP(ctx context.Context, server config.ProxyServer) (*
 	if _, err = io.ReadFull(ctrl, header); err != nil {
 		ctrl.Close()
 		return nil, err
+	}
+	if header[0] != 0x05 || header[2] != 0x00 {
+		ctrl.Close()
+		return nil, errors.New("SOCKS5 UDP 响应头无效")
 	}
 	if header[1] != 0x00 {
 		ctrl.Close()
@@ -112,7 +124,8 @@ func (d *Dialer) AssociateUDP(ctx context.Context, server config.ProxyServer) (*
 	return &UDPRelay{ctrlConn: ctrl, udpConn: udpConn, relay: relayAddr}, nil
 }
 
-// Send 把 payload 封装成 SOCKS5 UDP 数据报发给中继
+// Send 把 payload 封装成 SOCKS5 UDP 数据报发给中继。
+// param targetHost/targetPort/payload 为目标及负载；返回写入错误。
 func (r *UDPRelay) Send(targetHost string, targetPort uint16, payload []byte) error {
 	packet := buildUDPDatagram(targetHost, targetPort, payload)
 	_, err := r.udpConn.Write(packet)
@@ -120,7 +133,7 @@ func (r *UDPRelay) Send(targetHost string, targetPort uint16, payload []byte) er
 }
 
 // ReadPayload 读取一个数据报，剥离 SOCKS5 头后把净荷搬到 buf 开头。
-// 返回净荷长度，调用方直接用 buf[:n] 即可。
+// param buf 为接收空间；返回净荷长度，调用方用 buf[:n]，无效协议帧返回错误。
 func (r *UDPRelay) ReadPayload(buf []byte) (int, error) {
 	n, err := r.udpConn.Read(buf)
 	if err != nil {
@@ -135,6 +148,7 @@ func (r *UDPRelay) ReadPayload(buf []byte) (int, error) {
 	return payloadLen, nil
 }
 
+// Close 同时释放中继与 TCP 控制连接；param 无；返回聚合的关闭错误。
 func (r *UDPRelay) Close() error {
 	var errs []error
 	if r.udpConn != nil {
@@ -146,13 +160,14 @@ func (r *UDPRelay) Close() error {
 	return errors.Join(errs...)
 }
 
-// SetDeadline 设置 UDP 读超时
-func (r *UDPRelay) SetDeadline(t time.Time) {
-	if r.udpConn != nil {
-		_ = r.udpConn.SetDeadline(t)
-	}
+// SetDeadline 设置 UDP 收发期限。
+// param t 为期限；返回 socket 设置错误。
+func (r *UDPRelay) SetDeadline(t time.Time) error {
+	return r.udpConn.SetDeadline(t)
 }
 
+// buildUDPDatagram 封装 SOCKS5 UDP 报文。
+// param host/port/payload 为目的端点及负载；返回报文字节，调用者负责有效目标。
 func buildUDPDatagram(host string, port uint16, payload []byte) []byte {
 	buf := make([]byte, 0, len(payload)+300)
 	buf = append(buf, 0x00, 0x00, 0x00) // RSV + FRAG
@@ -178,6 +193,8 @@ func buildUDPDatagram(host string, port uint16, payload []byte) []byte {
 	return buf
 }
 
+// parseUDPDatagram 校验 SOCKS5 UDP 地址头和非分片约束。
+// param data 为完整报文；返回负载偏移和端点，格式错误时返回错误。
 func parseUDPDatagram(data []byte) (payloadOffset int, host string, port uint16, err error) {
 	if len(data) < 5 {
 		return 0, "", 0, errors.New("UDP 数据报过短")
@@ -217,7 +234,8 @@ func parseUDPDatagram(data []byte) (payloadOffset int, host string, port uint16,
 	return offset, host, port, nil
 }
 
-// socks5Auth 只完成 SOCKS5 的版本协商与认证，供 TCP / UDP 复用
+// socks5Auth 只完成 SOCKS5 的版本协商与认证，供 TCP / UDP 复用。
+// param conn/server 为控制连接及认证配置；返回认证、协议或 I/O 错误。
 func socks5Auth(conn net.Conn, server config.ProxyServer) error {
 	methods := []byte{0x05, 0x01, 0x00}
 	if server.Username != "" {
@@ -250,7 +268,7 @@ func socks5Auth(conn net.Conn, server config.ProxyServer) error {
 		if _, err := io.ReadFull(conn, authReply); err != nil {
 			return err
 		}
-		if authReply[1] != 0x00 {
+		if authReply[0] != 0x01 || authReply[1] != 0x00 {
 			return errors.New("SOCKS5 用户名密码认证被拒绝")
 		}
 	} else if reply[1] != 0x00 {

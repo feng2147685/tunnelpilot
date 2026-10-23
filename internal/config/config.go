@@ -104,9 +104,11 @@ func DefaultProfile() *Profile {
 	}
 }
 
+// FakeIPPrefixValue 读取 IPv4 Fake-IP 网段，供地址池与 TUN 共用。
+// param 无；返回合法 /8 至 /30 网段，无法解析或不受支持时回退默认 /15。
 func (p *Profile) FakeIPPrefixValue() netip.Prefix {
 	prefix, err := netip.ParsePrefix(p.FakeIPPrefix)
-	if err != nil {
+	if err != nil || !prefix.Addr().Is4() || prefix.Bits() < 8 || prefix.Bits() > 30 {
 		return netip.MustParsePrefix("198.18.0.0/15")
 	}
 	return prefix
